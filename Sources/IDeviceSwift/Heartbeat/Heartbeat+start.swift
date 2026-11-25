@@ -144,71 +144,86 @@ extension HeartbeatManager {
 
 	// MARK: - RSD Tunnel
 
-	internal func ensureRSDTunnel() -> Bool {
-		guard !isRestartInProgress else {
-			return true
+	private static let _rsdLock = NSLock()
+
+	func connectRSD(_ connect: (AdapterHandle, RsdHandshakeHandle) -> UnsafeMutablePointer<IdeviceFfiError>?) throws {
+		Self._rsdLock.lock()
+		defer { Self._rsdLock.unlock() }
+
+		if let adapter, let handshake {
+			guard let error = connect(adapter, handshake) else { return }
+			Logger.heartbeat.info("RSD connect failed (\(error.pointee.code)), rebuilding tunnel")
+			idevice_error_free(error)
 		}
-		
-		isRestartInProgress = true
-		restartLock.lock()
-		defer { restartLock.unlock() }
-		
+
+		try _rebuildRSDTunnel()
+
+		guard let adapter, let handshake else {
+			throw IDeviceSwiftError(message: "Cannot find RSD adapter")
+		}
+		if let error = connect(adapter, handshake) {
+			defer { idevice_error_free(error) }
+			throw IDeviceSwiftError(error)
+		}
+	}
+
+	private func _rebuildRSDTunnel() throws {
+		if let handshake {
+			rsd_handshake_free(handshake)
+			self.handshake = nil
+		}
+		if let adapter {
+			adapter_free(adapter)
+			self.adapter = nil
+		}
+
 		guard let pairingFile = getPairingRsd() else {
-			Logger.heartbeat.error("RSD pairing file not found")
-			return false
+			throw IDeviceSwiftError(message: "Missing Pairing")
 		}
-		
+		defer { rp_pairing_file_free(pairingFile) }
+
 		var addr = sockaddr_in()
-		memset(&addr, 0, MemoryLayout.size(ofValue: addr))
 		addr.sin_family = sa_family_t(AF_INET)
 		addr.sin_port = CFSwapInt16HostToBig(port_rsd)
-		
 		guard inet_pton(AF_INET, ipAddress, &addr.sin_addr) == 1 else {
-			Logger.heartbeat.error("Invalid IP address")
-			return false
+			throw IDeviceSwiftError(message: "Invalid IP address")
 		}
-		
-		var newAdapter: AdapterHandle?
-		var newHandshake: RsdHandshakeHandle?
-		
-		print("h")
-		
-		let result = withUnsafePointer(to: &addr) {
-			$0.withMemoryRebound(to: idevice_sockaddr.self, capacity: 1) { ptr in
-				tunnel_create_rppairing(
-					ptr,
-					socklen_t(MemoryLayout<sockaddr_in>.size),
-					"IdeviceKit",
-					pairingFile,
-					nil,
-					nil,
-					&newAdapter,
-					&newHandshake
-				)
+
+		// The VPN can take a moment to route after it connects, so a first failure is often transient.
+		let attempts = 3
+		for attempt in 1...attempts {
+			var newAdapter: AdapterHandle?
+			var newHandshake: RsdHandshakeHandle?
+
+			let error = withUnsafePointer(to: &addr) {
+				$0.withMemoryRebound(to: idevice_sockaddr.self, capacity: 1) { ptr in
+					tunnel_create_rppairing(
+						ptr,
+						socklen_t(MemoryLayout<sockaddr_in>.size),
+						"IdeviceKit",
+						pairingFile,
+						nil,
+						nil,
+						&newAdapter,
+						&newHandshake
+					)
+				}
 			}
+
+			guard let error else {
+				adapter = newAdapter
+				handshake = newHandshake
+				return
+			}
+
+			Logger.heartbeat.error("RSD tunnel attempt \(attempt) failed: \(error.pointee.code)")
+			if attempt == attempts {
+				defer { idevice_error_free(error) }
+				throw IDeviceSwiftError(error)
+			}
+			idevice_error_free(error)
+			Thread.sleep(forTimeInterval: Double(attempt))
 		}
-				
-		if let err = result {
-			let error = IDeviceSwiftError(err)
-			Logger.heartbeat.error("\(error): \(err.pointee.code)")
-			return false
-		}
-				
-		if let oldHandshake = handshake {
-			rsd_handshake_free(oldHandshake)
-		}
-		if let oldAdapter = adapter {
-			adapter_free(oldAdapter)
-		}
-		
-		adapter = newAdapter
-		handshake = newHandshake
-		
-		rp_pairing_file_free(pairingFile)
-		
-		isRestartInProgress = false
-		
-		return true
 	}
 
 	// MARK: - Start Heartbeat

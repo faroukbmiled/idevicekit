@@ -25,22 +25,12 @@ public class InstallationAppProxy: NSObject {
 				throw IDeviceSwiftError(message: "Missing Pairing")
 			}
 			
-			if !self._heartbeat.isRsd {
+			if self._heartbeat.isRsd {
+				try self._heartbeat.connectRSD { installation_proxy_connect_rsd($0, $1, &installproxy) }
+			} else {
 				guard self._heartbeat.checkSocketConnection().isConnected else {
 					throw IDeviceSwiftError(message: "Missing Pairing")
 				}
-			} else {
-				guard self._heartbeat.ensureRSDTunnel() else {
-					throw IDeviceSwiftError(message: "Missing Pairing")
-				}
-			}
-			
-			if self._heartbeat.isRsd {
-				let installation_proxy_connect_tcp_result = installation_proxy_connect_rsd(self._heartbeat.adapter, self._heartbeat.handshake, &installproxy)
-				guard installation_proxy_connect_tcp_result == nil else {
-					throw IDeviceSwiftError(installation_proxy_connect_tcp_result)
-				}
-			} else {
 				
 				let installation_proxy_connect_tcp_result = installation_proxy_connect(self._heartbeat.provider, &installproxy)
 				guard installation_proxy_connect_tcp_result == nil else {
@@ -136,10 +126,7 @@ extension InstallationAppProxy {
 		return try await Task.detached(priority: .userInitiated) {
 			
 			if HeartbeatManager.shared.isRsd {
-				let springboard_services_connect_result = springboard_services_connect_rsd(HeartbeatManager.shared.adapter, HeartbeatManager.shared.handshake, &springServices)
-				guard springboard_services_connect_result == nil else {
-					throw IDeviceSwiftError(springboard_services_connect_result)
-				}
+				try HeartbeatManager.shared.connectRSD { springboard_services_connect_rsd($0, $1, &springServices) }
 			} else {
 				let springboard_services_connect_result = springboard_services_connect(HeartbeatManager.shared.provider, &springServices)
 				guard springboard_services_connect_result == nil else {

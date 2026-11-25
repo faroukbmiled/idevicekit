@@ -35,11 +35,7 @@ public class InstallationProxy: Identifiable, ObservableObject {
 				throw IDeviceSwiftError(message: "Missing Pairing")
 			}
 			
-			if await self._heartbeat.isRsd {
-				guard await self._heartbeat.ensureRSDTunnel() else {
-					throw IDeviceSwiftError(message: "Missing Pairing")
-				}
-			} else {
+			if await !self._heartbeat.isRsd {
 				guard await self._heartbeat.checkSocketConnection().isConnected else {
 					throw IDeviceSwiftError(message: "Missing Pairing")
 				}
@@ -53,17 +49,7 @@ public class InstallationProxy: Identifiable, ObservableObject {
 			let heartbeat = await self._heartbeat
 			
 			if heartbeat.isRsd {
-				guard let adapter = heartbeat.adapter else {
-					throw IDeviceSwiftError(message: "Cannot find RSD adapter")
-				}
-				
-				guard let handshake = heartbeat.handshake else {
-					throw IDeviceSwiftError(message: "Cannot find RSD handshake")
-				}
-	
-				guard afc_client_connect_rsd(adapter, handshake, &afcClient) == nil else {
-					throw IDeviceSwiftError(message: "Cannot connect to AFC")
-				}
+				try heartbeat.connectRSD { afc_client_connect_rsd($0, $1, &afcClient) }
 			} else {
 				guard let provider = heartbeat.provider else {
 					throw IDeviceSwiftError(message: "Cannot find TCP provider")
@@ -134,20 +120,7 @@ public class InstallationProxy: Identifiable, ObservableObject {
 			
 			
 			if heartbeat.isRsd {
-				guard let adapter = heartbeat.adapter else {
-					throw IDeviceSwiftError(message: "Cannot find RSD adapter")
-				}
-				
-				guard let handshake = heartbeat.handshake else {
-					throw IDeviceSwiftError(message: "Cannot find RSD handshake")
-				}
-				
-				print(3)
-				
-				let installation_proxy_connect_rsd_result = installation_proxy_connect_rsd(adapter, handshake, &installproxy)
-				guard installation_proxy_connect_rsd_result == nil else {
-					throw IDeviceSwiftError(installation_proxy_connect_rsd_result)
-				}
+				try heartbeat.connectRSD { installation_proxy_connect_rsd($0, $1, &installproxy) }
 			} else {
 				guard let provider = heartbeat.provider else {
 					throw IDeviceSwiftError(message: "Cannot find TCP provider")

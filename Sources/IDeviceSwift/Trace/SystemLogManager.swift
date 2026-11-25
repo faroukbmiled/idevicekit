@@ -43,10 +43,6 @@ public class SystemLogManager: NSObject {
 			guard (self._heartbeat.provider != nil) else {
 				throw IDeviceSwiftError(message: "Missing Pairing")
 			}
-		} else {
-			guard self._heartbeat.ensureRSDTunnel() else {
-				throw IDeviceSwiftError(message: "Missing Pairing")
-			}
 		}
 	}
 	
@@ -56,18 +52,7 @@ public class SystemLogManager: NSObject {
 			try await self._connect()
 			
 			if self._heartbeat.isRsd {
-				guard let adapter = self._heartbeat.adapter else {
-					throw IDeviceSwiftError(message: "Cannot find RSD adapter")
-				}
-				
-				guard let handshake = self._heartbeat.handshake else {
-					throw IDeviceSwiftError(message: "Cannot find RSD handshake")
-				}
-				
-				let syslog_relay_connect_tcp_result = syslog_relay_connect_rsd(adapter, handshake, &self.syslogClient)
-				guard syslog_relay_connect_tcp_result == nil else {
-					throw IDeviceSwiftError(syslog_relay_connect_tcp_result)
-				}
+				try self._heartbeat.connectRSD { syslog_relay_connect_rsd($0, $1, &self.syslogClient) }
 			} else {
 				let syslog_relay_connect_tcp_result = syslog_relay_connect_tcp(self._heartbeat.provider, &self.syslogClient)
 				guard syslog_relay_connect_tcp_result == nil else {
@@ -114,17 +99,7 @@ public class SystemLogManager: NSObject {
 			try await self._connect()
 			
 			if self._heartbeat.isRsd {
-				guard let adapter = self._heartbeat.adapter else {
-					throw IDeviceSwiftError(message: "Cannot find RSD adapter")
-				}
-				
-				guard let handshake = self._heartbeat.handshake else {
-					throw IDeviceSwiftError(message: "Cannot find RSD handshake")
-				}
-				let os_trace_relay_connect_rsd_result = os_trace_relay_connect_rsd(adapter, handshake, &self.osTraceRelayClient)
-				guard os_trace_relay_connect_rsd_result == nil else {
-					throw IDeviceSwiftError(os_trace_relay_connect_rsd_result)
-				}
+				try self._heartbeat.connectRSD { os_trace_relay_connect_rsd($0, $1, &self.osTraceRelayClient) }
 			} else {
 				let os_trace_relay_connect_result = os_trace_relay_connect(self._heartbeat.provider, &self.osTraceRelayClient)
 				guard os_trace_relay_connect_result == nil else {
