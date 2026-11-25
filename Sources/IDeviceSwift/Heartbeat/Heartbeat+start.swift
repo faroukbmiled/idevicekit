@@ -145,6 +145,7 @@ extension HeartbeatManager {
 	// MARK: - RSD Tunnel
 
 	private static let _rsdLock = NSLock()
+	private static var _rsdPort: UInt16?
 
 	func connectRSD(_ connect: (AdapterHandle, RsdHandshakeHandle) -> UnsafeMutablePointer<IdeviceFfiError>?) throws {
 		Self._rsdLock.lock()
@@ -182,48 +183,69 @@ extension HeartbeatManager {
 		}
 		defer { rp_pairing_file_free(pairingFile) }
 
-		var addr = sockaddr_in()
-		addr.sin_family = sa_family_t(AF_INET)
-		addr.sin_port = CFSwapInt16HostToBig(port_rsd)
-		guard inet_pton(AF_INET, ipAddress, &addr.sin_addr) == 1 else {
+		var address = sockaddr_in()
+		address.sin_family = sa_family_t(AF_INET)
+		guard inet_pton(AF_INET, ipAddress, &address.sin_addr) == 1 else {
 			throw IDeviceSwiftError(message: "Invalid IP address")
 		}
 
+		var lastError: IDeviceSwiftError?
 		// The VPN can take a moment to route after it connects, so a first failure is often transient.
 		let attempts = 3
 		for attempt in 1...attempts {
-			var newAdapter: AdapterHandle?
-			var newHandshake: RsdHandshakeHandle?
+			var tried: Set<UInt16> = []
 
-			let error = withUnsafePointer(to: &addr) {
-				$0.withMemoryRebound(to: idevice_sockaddr.self, capacity: 1) { ptr in
-					tunnel_create_rppairing(
-						ptr,
-						socklen_t(MemoryLayout<sockaddr_in>.size),
-						"IdeviceKit",
-						pairingFile,
-						nil,
-						nil,
-						&newAdapter,
-						&newHandshake
-					)
+			func open(_ port: UInt16) -> Bool {
+				guard tried.insert(port).inserted else { return false }
+				address.sin_port = CFSwapInt16HostToBig(port)
+				guard let error = _createRSDTunnel(address, pairingFile: pairingFile) else {
+					Self._rsdPort = port
+					return true
 				}
+				Logger.heartbeat.error("RSD tunnel on port \(port) failed: \(error.pointee.code)")
+				lastError = IDeviceSwiftError(error)
+				idevice_error_free(error)
+				return false
 			}
 
-			guard let error else {
-				adapter = newAdapter
-				handshake = newHandshake
-				return
+			if open(Self._rsdPort ?? port_rsd) { return }
+			for port in RSDPortDiscovery.ports() + [port_rsd] {
+				if open(port) { return }
 			}
 
-			Logger.heartbeat.error("RSD tunnel attempt \(attempt) failed: \(error.pointee.code)")
-			if attempt == attempts {
-				defer { idevice_error_free(error) }
-				throw IDeviceSwiftError(error)
+			if attempt < attempts {
+				Thread.sleep(forTimeInterval: Double(attempt))
 			}
-			idevice_error_free(error)
-			Thread.sleep(forTimeInterval: Double(attempt))
 		}
+
+		throw lastError ?? IDeviceSwiftError(message: "Cannot create RSD tunnel")
+	}
+
+	private func _createRSDTunnel(_ address: sockaddr_in, pairingFile: RpPairingFileHandle) -> UnsafeMutablePointer<IdeviceFfiError>? {
+		var address = address
+		var newAdapter: AdapterHandle?
+		var newHandshake: RsdHandshakeHandle?
+
+		let error = withUnsafePointer(to: &address) {
+			$0.withMemoryRebound(to: idevice_sockaddr.self, capacity: 1) { ptr in
+				tunnel_create_rppairing(
+					ptr,
+					socklen_t(MemoryLayout<sockaddr_in>.size),
+					"IdeviceKit",
+					pairingFile,
+					nil,
+					nil,
+					&newAdapter,
+					&newHandshake
+				)
+			}
+		}
+
+		if error == nil {
+			adapter = newAdapter
+			handshake = newHandshake
+		}
+		return error
 	}
 
 	// MARK: - Start Heartbeat

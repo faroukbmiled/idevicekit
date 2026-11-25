@@ -90,9 +90,15 @@ public class InstallationAppProxy: NSObject {
 		var installproxy: InstallationProxyClientHandle?
 		
 		return try await Task.detached(priority: .userInitiated) {
-			let installation_proxy_connect_result = installation_proxy_connect(HeartbeatManager.shared.provider, &installproxy)
-			guard installation_proxy_connect_result == nil else {
-				throw IDeviceSwiftError(installation_proxy_connect_result)
+			defer { installation_proxy_client_free(installproxy) }
+			
+			if HeartbeatManager.shared.isRsd {
+				try HeartbeatManager.shared.connectRSD { installation_proxy_connect_rsd($0, $1, &installproxy) }
+			} else {
+				let installation_proxy_connect_result = installation_proxy_connect(HeartbeatManager.shared.provider, &installproxy)
+				guard installation_proxy_connect_result == nil else {
+					throw IDeviceSwiftError(installation_proxy_connect_result)
+				}
 			}
 			
 			let installation_proxy_uninstall_result = installation_proxy_uninstall(installproxy, id, nil)
